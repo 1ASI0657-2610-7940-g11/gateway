@@ -1,0 +1,224 @@
+using Fuel.Events;
+using Fuel.Reporting.Service.Infrastructure.Data;
+using Fuel.Reporting.Service.Infrastructure.Data.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
+using System.Text;
+using System.Text.Json;
+
+namespace Fuel.Reporting.Service.Infrastructure.Messaging;
+
+public class EventConsumerService : BackgroundService
+{
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IConfiguration _configuration;
+    private readonly ILogger<EventConsumerService> _logger;
+    private IConnection _connection;
+    private IModel _channel;
+
+    public EventConsumerService(IServiceScopeFactory scopeFactory, IConfiguration configuration, ILogger<EventConsumerService> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _configuration = configuration;
+        _logger = logger;
+    }
+
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = _configuration["RabbitMQ:Host"] ?? "localhost",
+            Port = int.Parse(_configuration["RabbitMQ:Port"] ?? "5672"),
+            UserName = _configuration["RabbitMQ:Username"] ?? "admin",
+            Password = _configuration["RabbitMQ:Password"] ?? "ChangeMe123"
+        };
+
+        _connection = factory.CreateConnection();
+        _channel = _connection.CreateModel();
+
+        _channel.ExchangeDeclare("order-events", ExchangeType.Fanout, durable: true);
+        _channel.ExchangeDeclare("payment-events", ExchangeType.Fanout, durable: true);
+        _channel.ExchangeDeclare("user-events", ExchangeType.Fanout, durable: true);
+
+        var orderQueue = _channel.QueueDeclare("reporting-order-queue", durable: true, exclusive: false, autoDelete: false).QueueName;
+        var paymentQueue = _channel.QueueDeclare("reporting-payment-queue", durable: true, exclusive: false, autoDelete: false).QueueName;
+        var userQueue = _channel.QueueDeclare("reporting-user-queue", durable: true, exclusive: false, autoDelete: false).QueueName;
+
+        _channel.QueueBind(orderQueue, "order-events", "");
+        _channel.QueueBind(paymentQueue, "payment-events", "");
+        _channel.QueueBind(userQueue, "user-events", "");
+
+        var orderConsumer = new AsyncEventingBasicConsumer(_channel);
+        orderConsumer.Received += async (sender, ea) =>
+        {
+            var body = Encoding.UTF8.GetString(ea.Body.ToArray());
+            var correlationId = ea.BasicProperties.CorrelationId;
+            _logger.LogInformation("Order event received with correlation {CorrelationId}", correlationId);
+
+            if (ea.BasicProperties.Headers?.TryGetValue("EventType", out var eventTypeObj) == true)
+            {
+                var eventType = Encoding.UTF8.GetString((byte[])eventTypeObj);
+                await ProcessOrderEvent(eventType, body);
+            }
+            _channel.BasicAck(ea.DeliveryTag, false);
+        };
+        _channel.BasicConsume(orderConsumer, orderQueue, false);
+
+        var paymentConsumer = new AsyncEventingBasicConsumer(_channel);
+        paymentConsumer.Received += async (sender, ea) =>
+        {
+            var body = Encoding.UTF8.GetString(ea.Body.ToArray());
+            _logger.LogInformation("Payment event received");
+            await ProcessPaymentEvent(body);
+            _channel.BasicAck(ea.DeliveryTag, false);
+        };
+        _channel.BasicConsume(paymentConsumer, paymentQueue, false);
+
+        var userConsumer = new AsyncEventingBasicConsumer(_channel);
+        userConsumer.Received += async (sender, ea) =>
+        {
+            var body = Encoding.UTF8.GetString(ea.Body.ToArray());
+            _logger.LogInformation("User event received");
+            await ProcessUserEvent(body);
+            _channel.BasicAck(ea.DeliveryTag, false);
+        };
+        _channel.BasicConsume(userConsumer, userQueue, false);
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ProcessOrderEvent(string eventType, string body)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportingDbContext>();
+
+        try
+        {
+            if (eventType == nameof(OrderCreatedEvent))
+            {
+                var evt = JsonSerializer.Deserialize<OrderCreatedEvent>(body)!;
+                var kpi = new OrderKpiEntity
+                {
+                    UserId = evt.UserId,
+                    OrderCode = evt.Code,
+                    Status = "Scheduled",
+                    FuelType = evt.FuelType,
+                    QuantityGallons = evt.QuantityGallons,
+                    CreatedAtUtc = DateTime.UtcNow
+                };
+                db.OrderKpis.Add(kpi);
+                await UpdateDashboardFromOrder(db, evt.UserId);
+            }
+            else if (eventType == nameof(OrderStatusUpdatedEvent))
+            {
+                var evt = JsonSerializer.Deserialize<OrderStatusUpdatedEvent>(body)!;
+                var kpi = await db.OrderKpis.FirstOrDefaultAsync(x => x.OrderCode == evt.Code);
+                if (kpi != null)
+                {
+                    kpi.Status = evt.NewStatus;
+                    await UpdateDashboardFromOrder(db, evt.UserId);
+                }
+            }
+            await db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing order event");
+        }
+    }
+
+    private async Task ProcessPaymentEvent(string body)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportingDbContext>();
+
+        try
+        {
+            // Simplificación: actualiza dashboard con último pago simbólico
+            if (body.Contains("PaymentMethodAddedEvent"))
+            {
+                var evt = JsonSerializer.Deserialize<PaymentMethodAddedEvent>(body)!;
+                var dashboard = await db.Dashboards.FindAsync(evt.UserId);
+                if (dashboard != null)
+                {
+                    dashboard.LastPaymentMethod = $"{evt.Brand} ****{evt.Last4}";
+                    dashboard.LastPaymentStatus = "Activo";
+                    dashboard.LastUpdatedUtc = DateTime.UtcNow;
+                }
+            }
+            await db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing payment event");
+        }
+    }
+
+    private async Task ProcessUserEvent(string body)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ReportingDbContext>();
+
+        try
+        {
+            if (body.Contains("UserRegisteredEvent"))
+            {
+                var evt = JsonSerializer.Deserialize<UserRegisteredEvent>(body)!;
+                var dashboard = new DashboardEntity
+                {
+                    UserId = evt.UserId,
+                    CompanyName = evt.FullName,
+                    LastUpdatedUtc = DateTime.UtcNow
+                };
+                db.Dashboards.Add(dashboard);
+            }
+            else if (body.Contains("ProfileUpdatedEvent"))
+            {
+                var evt = JsonSerializer.Deserialize<ProfileUpdatedEvent>(body)!;
+                var dashboard = await db.Dashboards.FindAsync(evt.UserId);
+                if (dashboard != null)
+                {
+                    dashboard.CompanyName = evt.FullName;
+                    dashboard.AvatarUrl = evt.AvatarUrl;
+                    dashboard.LastUpdatedUtc = DateTime.UtcNow;
+                }
+            }
+            await db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing user event");
+        }
+    }
+
+    private async Task UpdateDashboardFromOrder(ReportingDbContext db, string userId)
+    {
+        var dashboard = await db.Dashboards.FindAsync(userId);
+        if (dashboard == null) return;
+
+        var activeOrder = await db.OrderKpis
+            .Where(x => x.UserId == userId && x.Status != "Delivered" && x.Status != "Cancelled")
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .FirstOrDefaultAsync();
+
+        if (activeOrder != null)
+        {
+            dashboard.ActiveOrderFuelType = activeOrder.FuelType;
+            dashboard.ActiveOrderQuantityGallons = activeOrder.QuantityGallons;
+            dashboard.ActiveOrderStatus = activeOrder.Status;
+            dashboard.NextDeliveryStatus = activeOrder.Status;
+        }
+        dashboard.LastUpdatedUtc = DateTime.UtcNow;
+    }
+
+    public override void Dispose()
+    {
+        _channel?.Dispose();
+        _connection?.Dispose();
+        base.Dispose();
+    }
+}

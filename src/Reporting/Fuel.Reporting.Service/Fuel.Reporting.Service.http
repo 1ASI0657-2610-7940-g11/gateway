@@ -1,0 +1,6 @@
+@Fuel.Reporting.Service_HostAddress = http://localhost:5071
+
+GET {{Fuel.Reporting.Service_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

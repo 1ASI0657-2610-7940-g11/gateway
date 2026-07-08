@@ -1,0 +1,48 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using System;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// 1) Configuración en cascada: archivos base, específicos del entorno y variables de entorno
+builder.Configuration
+    .SetBasePath(builder.Environment.ContentRootPath)
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables();
+
+// Puerto fijo (puede ser sobrescrito por la variable PORT)
+var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+
+// 2) YARP: toda la configuración de rutas y clusters se toma del archivo y de las variables de entorno
+builder.Services.AddReverseProxy()
+    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+
+// 3) CORS centralizado – lee orígenes desde configuración (archivo o variable de entorno)
+var originsConfig = builder.Configuration["AllowedOrigins"]
+    ?? builder.Configuration["ALLOWED_ORIGINS"]
+    ?? "http://localhost:5173";
+var allowedOrigins = originsConfig.Split(",", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("Frontend", policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
+
+var app = builder.Build();
+
+// 4) Endpoint de salud para el orquestador
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "Fuel.Gateway" }));
+
+// 5) Middleware de CORS y proxy
+app.UseCors("Frontend");
+app.MapReverseProxy();
+
+app.Run();

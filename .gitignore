@@ -1,0 +1,14 @@
+bin/
+obj/
+TestResults/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.idea/
+*.log
+.env
+.env.*
+!.env.example
+!.env.railway.example
