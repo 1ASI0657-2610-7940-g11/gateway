@@ -37,7 +37,9 @@ builder.Services.AddDbContext<ReportingDbContext>(opts => opts.UseMySQL(connStr)
 
 // Redis (caché)
 var redisConn = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisConn));
+var redisOptions = ConfigurationOptions.Parse(redisConn);
+redisOptions.AbortOnConnectFail = false;
+builder.Services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisOptions));
 builder.Services.AddSingleton<RedisCacheService>();
 
 // JWT (misma configuración que los otros servicios)
