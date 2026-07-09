@@ -15,7 +15,8 @@ using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var port = Environment.GetEnvironmentVariable("PORT") ?? "5001";
+var port = Environment.GetEnvironmentVariable("PORT")
+    ?? (builder.Environment.IsDevelopment() ? "5001" : "8080");
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 // Trazabilidad

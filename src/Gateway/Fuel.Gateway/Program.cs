@@ -13,7 +13,8 @@ builder.Configuration
     .AddEnvironmentVariables();
 
 // Puerto fijo (puede ser sobrescrito por la variable PORT)
-var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+var port = Environment.GetEnvironmentVariable("PORT")
+    ?? (builder.Environment.IsDevelopment() ? "5000" : "8080");
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 // 2) YARP: toda la configuración de rutas y clusters se toma del archivo y de las variables de entorno
