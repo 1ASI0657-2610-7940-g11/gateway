@@ -103,7 +103,7 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<IdentityDbContext>();
-    await db.Database.EnsureCreatedAsync();
+    await EnsureDatabaseCreatedWithRetryAsync(db.Database, app.Logger, "Identity");
 }
 
 app.UseCorrelationId();
@@ -121,3 +121,31 @@ app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "Fuel.Identity.Service" }))
     .AllowAnonymous();
 app.Run();
+
+static async Task EnsureDatabaseCreatedWithRetryAsync(
+    Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade database,
+    ILogger logger,
+    string serviceName)
+{
+    const int maxAttempts = 12;
+
+    for (var attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        try
+        {
+            await database.EnsureCreatedAsync();
+            return;
+        }
+        catch (Exception ex) when (attempt < maxAttempts)
+        {
+            logger.LogWarning(ex,
+                "{ServiceName} database is not ready. Retry {Attempt}/{MaxAttempts}.",
+                serviceName,
+                attempt,
+                maxAttempts);
+            await Task.Delay(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    await database.EnsureCreatedAsync();
+}
