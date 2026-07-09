@@ -7,6 +7,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using RabbitMQ.Client.Exceptions;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 
@@ -17,8 +19,8 @@ public class EventConsumerService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<EventConsumerService> _logger;
-    private IConnection _connection;
-    private IModel _channel;
+    private IConnection? _connection;
+    private IModel? _channel;
 
     public EventConsumerService(IServiceScopeFactory scopeFactory, IConfiguration configuration, ILogger<EventConsumerService> logger)
     {
@@ -27,14 +29,41 @@ public class EventConsumerService : BackgroundService
         _logger = logger;
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                StartConsumers();
+                await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex) when (ex is BrokerUnreachableException or SocketException or TimeoutException)
+            {
+                _logger.LogWarning(ex, "RabbitMQ unavailable for Reporting consumer. Retrying in 10 seconds.");
+                DisposeRabbitMq();
+                await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+            }
+        }
+    }
+
+    private void StartConsumers()
     {
         var factory = new ConnectionFactory
         {
             HostName = _configuration["RabbitMQ:Host"] ?? "localhost",
             Port = int.Parse(_configuration["RabbitMQ:Port"] ?? "5672"),
             UserName = _configuration["RabbitMQ:Username"] ?? "admin",
-            Password = _configuration["RabbitMQ:Password"] ?? "ChangeMe123"
+            Password = _configuration["RabbitMQ:Password"] ?? "ChangeMe123",
+            RequestedConnectionTimeout = TimeSpan.FromSeconds(3),
+            SocketReadTimeout = TimeSpan.FromSeconds(3),
+            SocketWriteTimeout = TimeSpan.FromSeconds(3),
+            DispatchConsumersAsync = true,
+            AutomaticRecoveryEnabled = true
         };
 
         _connection = factory.CreateConnection();
@@ -59,9 +88,9 @@ public class EventConsumerService : BackgroundService
             var correlationId = ea.BasicProperties.CorrelationId;
             _logger.LogInformation("Order event received with correlation {CorrelationId}", correlationId);
 
-            if (ea.BasicProperties.Headers?.TryGetValue("EventType", out var eventTypeObj) == true)
+            var eventType = GetEventType(ea.BasicProperties.Headers);
+            if (!string.IsNullOrWhiteSpace(eventType))
             {
-                var eventType = Encoding.UTF8.GetString((byte[])eventTypeObj);
                 await ProcessOrderEvent(eventType, body);
             }
             _channel.BasicAck(ea.DeliveryTag, false);
@@ -73,7 +102,7 @@ public class EventConsumerService : BackgroundService
         {
             var body = Encoding.UTF8.GetString(ea.Body.ToArray());
             _logger.LogInformation("Payment event received");
-            await ProcessPaymentEvent(body);
+            await ProcessPaymentEvent(GetEventType(ea.BasicProperties.Headers), body);
             _channel.BasicAck(ea.DeliveryTag, false);
         };
         _channel.BasicConsume(paymentConsumer, paymentQueue, false);
@@ -83,12 +112,10 @@ public class EventConsumerService : BackgroundService
         {
             var body = Encoding.UTF8.GetString(ea.Body.ToArray());
             _logger.LogInformation("User event received");
-            await ProcessUserEvent(body);
+            await ProcessUserEvent(GetEventType(ea.BasicProperties.Headers), body);
             _channel.BasicAck(ea.DeliveryTag, false);
         };
         _channel.BasicConsume(userConsumer, userQueue, false);
-
-        return Task.CompletedTask;
     }
 
     private async Task ProcessOrderEvent(string eventType, string body)
@@ -131,7 +158,7 @@ public class EventConsumerService : BackgroundService
         }
     }
 
-    private async Task ProcessPaymentEvent(string body)
+    private async Task ProcessPaymentEvent(string? eventType, string body)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ReportingDbContext>();
@@ -139,7 +166,7 @@ public class EventConsumerService : BackgroundService
         try
         {
             // Simplificación: actualiza dashboard con último pago simbólico
-            if (body.Contains("PaymentMethodAddedEvent"))
+            if (eventType == nameof(PaymentMethodAddedEvent))
             {
                 var evt = JsonSerializer.Deserialize<PaymentMethodAddedEvent>(body)!;
                 var dashboard = await db.Dashboards.FindAsync(evt.UserId);
@@ -158,14 +185,14 @@ public class EventConsumerService : BackgroundService
         }
     }
 
-    private async Task ProcessUserEvent(string body)
+    private async Task ProcessUserEvent(string? eventType, string body)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ReportingDbContext>();
 
         try
         {
-            if (body.Contains("UserRegisteredEvent"))
+            if (eventType == nameof(UserRegisteredEvent))
             {
                 var evt = JsonSerializer.Deserialize<UserRegisteredEvent>(body)!;
                 var dashboard = new DashboardEntity
@@ -176,7 +203,7 @@ public class EventConsumerService : BackgroundService
                 };
                 db.Dashboards.Add(dashboard);
             }
-            else if (body.Contains("ProfileUpdatedEvent"))
+            else if (eventType == nameof(ProfileUpdatedEvent))
             {
                 var evt = JsonSerializer.Deserialize<ProfileUpdatedEvent>(body)!;
                 var dashboard = await db.Dashboards.FindAsync(evt.UserId);
@@ -217,8 +244,28 @@ public class EventConsumerService : BackgroundService
 
     public override void Dispose()
     {
+        DisposeRabbitMq();
+        base.Dispose();
+    }
+
+    private static string? GetEventType(IDictionary<string, object>? headers)
+    {
+        if (headers?.TryGetValue("EventType", out var value) != true)
+            return null;
+
+        return value switch
+        {
+            byte[] bytes => Encoding.UTF8.GetString(bytes),
+            string text => text,
+            _ => value?.ToString()
+        };
+    }
+
+    private void DisposeRabbitMq()
+    {
         _channel?.Dispose();
         _connection?.Dispose();
-        base.Dispose();
+        _channel = null;
+        _connection = null;
     }
 }

@@ -1,8 +1,6 @@
 using Fuel.Events;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Polly;
-using Polly.Retry;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Exceptions;
 using System.Net.Sockets;
@@ -13,53 +11,74 @@ namespace Fuel.Identity.Service.Infrastructure.Messaging;
 
 public class RabbitMqPublisher : IMessagePublisher, IDisposable
 {
-    private IConnection _connection;
-    private IModel _channel;
+    private readonly ConnectionFactory _factory;
     private readonly ILogger<RabbitMqPublisher> _logger;
+    private readonly object _syncRoot = new();
+    private IConnection? _connection;
+    private IModel? _channel;
 
     public RabbitMqPublisher(IConfiguration configuration, ILogger<RabbitMqPublisher> logger)
     {
         _logger = logger;
-        var factory = new ConnectionFactory
+        _factory = new ConnectionFactory
         {
             HostName = configuration["RabbitMQ:Host"] ?? "localhost",
             Port = int.Parse(configuration["RabbitMQ:Port"] ?? "5672"),
             UserName = configuration["RabbitMQ:Username"] ?? "admin",
-            Password = configuration["RabbitMQ:Password"] ?? "ChangeMe123"
+            Password = configuration["RabbitMQ:Password"] ?? "ChangeMe123",
+            RequestedConnectionTimeout = TimeSpan.FromSeconds(3),
+            SocketReadTimeout = TimeSpan.FromSeconds(3),
+            SocketWriteTimeout = TimeSpan.FromSeconds(3),
+            AutomaticRecoveryEnabled = true
         };
-
-        var retryPolicy = RetryPolicy
-            .Handle<BrokerUnreachableException>()
-            .Or<SocketException>()
-            .WaitAndRetry(5, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)),
-                onRetry: (exception, timeSpan, retryCount, context) =>
-                {
-                    _logger.LogWarning(exception,
-                        "Retry {RetryCount} connecting to RabbitMQ after {TimeSpan}s...", retryCount, timeSpan.TotalSeconds);
-                });
-
-        retryPolicy.Execute(() =>
-        {
-            _connection = factory.CreateConnection();
-            _channel = _connection.CreateModel();
-            _logger.LogInformation("RabbitMQ connection established.");
-        });
     }
 
     public void Publish<T>(string exchange, string routingKey, T message, string? correlationId = null)
     {
-        _channel.ExchangeDeclare(exchange, ExchangeType.Fanout, durable: true);
+        var channel = GetOrCreateChannel();
+        if (channel is null)
+        {
+            _logger.LogWarning("RabbitMQ unavailable. Skipping publish of {Event}.", typeof(T).Name);
+            return;
+        }
+
+        channel.ExchangeDeclare(exchange, ExchangeType.Fanout, durable: true);
 
         var json = JsonSerializer.Serialize(message);
         var body = Encoding.UTF8.GetBytes(json);
 
-        var props = _channel.CreateBasicProperties();
+        var props = channel.CreateBasicProperties();
         props.Persistent = true;
+        props.Headers = new Dictionary<string, object> { ["EventType"] = typeof(T).Name };
         if (correlationId != null)
             props.CorrelationId = correlationId;
 
-        _channel.BasicPublish(exchange, routingKey, props, body);
+        channel.BasicPublish(exchange, routingKey, props, body);
         _logger.LogInformation("Published {Event} with correlation {CorrelationId}", typeof(T).Name, correlationId);
+    }
+
+    private IModel? GetOrCreateChannel()
+    {
+        if (_channel?.IsOpen == true) return _channel;
+
+        lock (_syncRoot)
+        {
+            if (_channel?.IsOpen == true) return _channel;
+
+            try
+            {
+                _connection?.Dispose();
+                _connection = _factory.CreateConnection();
+                _channel = _connection.CreateModel();
+                _logger.LogInformation("RabbitMQ connection established.");
+                return _channel;
+            }
+            catch (Exception ex) when (ex is BrokerUnreachableException or SocketException or TimeoutException)
+            {
+                _logger.LogWarning(ex, "RabbitMQ connection failed.");
+                return null;
+            }
+        }
     }
 
     public void Dispose()
