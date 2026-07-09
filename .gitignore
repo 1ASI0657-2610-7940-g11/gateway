@@ -1,13 +1,26 @@
+# Build
 bin/
 obj/
+
+# Test results
 TestResults/
+coverage/
+coveragereport/
+*.coverage
+coverage.cobertura.xml
+
+# Visual Studio / Rider / IntelliJ
+.vs/
+.idea/
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
-.vs/
-.idea/
+
+# Logs
 *.log
+
+# Environment
 .env
 .env.*
 !.env.example
