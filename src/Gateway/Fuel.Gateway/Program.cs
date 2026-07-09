@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System;
@@ -20,6 +21,17 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 // 2) YARP: toda la configuración de rutas y clusters se toma del archivo y de las variables de entorno
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+
+// Evita que el frontend quede esperando indefinidamente si un microservicio no responde.
+builder.Services.AddRequestTimeouts(options =>
+{
+    options.DefaultPolicy = new RequestTimeoutPolicy
+    {
+        Timeout = TimeSpan.FromSeconds(
+            builder.Configuration.GetValue("ProxyTimeoutSeconds", 15)),
+        TimeoutStatusCode = StatusCodes.Status504GatewayTimeout
+    };
+});
 
 // 3) CORS centralizado – lee orígenes desde configuración (archivo o variable de entorno)
 var originsConfig = builder.Configuration["AllowedOrigins"]
@@ -44,6 +56,8 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", service = "Fuel
 
 // 5) Middleware de CORS y proxy
 app.UseCors("Frontend");
-app.MapReverseProxy();
+app.UseRequestTimeouts();
+app.MapReverseProxy().WithRequestTimeout(TimeSpan.FromSeconds(
+    builder.Configuration.GetValue("ProxyTimeoutSeconds", 15)));
 
 app.Run();
