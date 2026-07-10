@@ -88,6 +88,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<PaymentsDbContext>();
     await EnsureDatabaseCreatedWithRetryAsync(db.Database, app.Logger, "Payments");
+    await EnsurePaymentsSchemaAsync(db.Database);
 }
 
 app.UseCorrelationId();
@@ -132,4 +133,37 @@ static async Task EnsureDatabaseCreatedWithRetryAsync(
     }
 
     await database.EnsureCreatedAsync();
+}
+
+static async Task EnsurePaymentsSchemaAsync(
+    Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade database)
+{
+    await database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS `payment_methods` (
+            `Id` varchar(32) NOT NULL,
+            `UserId` varchar(32) NOT NULL,
+            `Brand` varchar(40) NOT NULL,
+            `Last4` varchar(4) NOT NULL,
+            `Holder` varchar(160) NOT NULL,
+            `Expires` varchar(5) NOT NULL,
+            `IsDefault` tinyint(1) NOT NULL,
+            `CreatedAtUtc` datetime(6) NOT NULL,
+            PRIMARY KEY (`Id`),
+            KEY `IX_payment_methods_UserId` (`UserId`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """);
+
+    await database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS `payment_history` (
+            `Id` varchar(32) NOT NULL,
+            `UserId` varchar(32) NOT NULL,
+            `DateUtc` datetime(6) NOT NULL,
+            `Description` varchar(300) NOT NULL,
+            `Amount` decimal(14,2) NOT NULL,
+            `Currency` varchar(3) NOT NULL,
+            `Status` varchar(30) NOT NULL,
+            PRIMARY KEY (`Id`),
+            KEY `IX_payment_history_UserId` (`UserId`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """);
 }

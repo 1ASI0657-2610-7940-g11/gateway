@@ -96,6 +96,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<OrdersDbContext>();
     await EnsureDatabaseCreatedWithRetryAsync(db.Database, app.Logger, "Orders");
+    await EnsureOrdersSchemaAsync(db.Database);
 }
 
 app.UseCorrelationId();
@@ -140,4 +141,34 @@ static async Task EnsureDatabaseCreatedWithRetryAsync(
     }
 
     await database.EnsureCreatedAsync();
+}
+
+static async Task EnsureOrdersSchemaAsync(
+    Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade database)
+{
+    await database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS `orders` (
+            `Id` varchar(32) NOT NULL,
+            `UserId` varchar(32) NOT NULL,
+            `Code` varchar(40) NOT NULL,
+            `Status` varchar(20) NOT NULL,
+            `Product` varchar(100) NOT NULL,
+            `QuantityGallons` int NOT NULL,
+            `CreatedAtUtc` datetime(6) NOT NULL,
+            `Eta` varchar(200) NOT NULL,
+            `Plant` varchar(160) NOT NULL,
+            `Address` varchar(300) NOT NULL,
+            `TimeWindow` varchar(100) NOT NULL,
+            `Notes` varchar(1000) NULL,
+            `PaymentMethod` varchar(120) NULL,
+            `Amount` decimal(14,2) NULL,
+            `VehicleId` varchar(60) NULL,
+            `VehiclePlate` varchar(30) NULL,
+            `DriverName` varchar(160) NULL,
+            `LastStatusComment` varchar(500) NULL,
+            PRIMARY KEY (`Id`),
+            UNIQUE KEY `IX_orders_Code` (`Code`),
+            KEY `IX_orders_UserId_CreatedAtUtc` (`UserId`, `CreatedAtUtc`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """);
 }

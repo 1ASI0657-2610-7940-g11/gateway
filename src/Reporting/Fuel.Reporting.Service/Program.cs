@@ -113,6 +113,7 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<ReportingDbContext>();
     await EnsureDatabaseCreatedWithRetryAsync(db.Database, app.Logger, "Reporting");
+    await EnsureReportingSchemaAsync(db.Database);
 }
 
 app.UseCorrelationId();
@@ -157,4 +158,42 @@ static async Task EnsureDatabaseCreatedWithRetryAsync(
     }
 
     await database.EnsureCreatedAsync();
+}
+
+static async Task EnsureReportingSchemaAsync(
+    Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade database)
+{
+    await database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS `dashboards` (
+            `UserId` varchar(32) NOT NULL,
+            `CompanyName` varchar(200) NOT NULL,
+            `AvatarUrl` varchar(200) NULL,
+            `ActiveOrderFuelType` varchar(100) NULL,
+            `ActiveOrderQuantityGallons` int NULL,
+            `ActiveOrderStatus` varchar(20) NULL,
+            `NextDeliveryDateTime` varchar(200) NULL,
+            `NextDeliveryLocation` varchar(200) NULL,
+            `NextDeliveryStatus` varchar(20) NULL,
+            `LastPaymentAmount` varchar(50) NULL,
+            `LastPaymentMethod` varchar(40) NULL,
+            `LastPaymentStatus` varchar(30) NULL,
+            `LastUpdatedUtc` datetime(6) NOT NULL,
+            PRIMARY KEY (`UserId`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """);
+
+    await database.ExecuteSqlRawAsync("""
+        CREATE TABLE IF NOT EXISTS `order_kpis` (
+            `Id` varchar(32) NOT NULL,
+            `UserId` varchar(32) NOT NULL,
+            `OrderCode` varchar(40) NOT NULL,
+            `Status` varchar(20) NOT NULL,
+            `FuelType` varchar(100) NOT NULL,
+            `QuantityGallons` int NOT NULL,
+            `Amount` decimal(14,2) NOT NULL,
+            `CreatedAtUtc` datetime(6) NOT NULL,
+            PRIMARY KEY (`Id`),
+            KEY `IX_order_kpis_UserId_CreatedAtUtc` (`UserId`, `CreatedAtUtc`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """);
 }
