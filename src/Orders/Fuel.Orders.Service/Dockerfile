@@ -1,5 +1,5 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-# Railway redeploy trigger for Orders production fixes.
+# Railway redeploy trigger for Orders edit/delete production fixes.
 WORKDIR /src
 
 COPY ["shared/Fuel.Events/Fuel.Events.csproj", "shared/Fuel.Events/"]

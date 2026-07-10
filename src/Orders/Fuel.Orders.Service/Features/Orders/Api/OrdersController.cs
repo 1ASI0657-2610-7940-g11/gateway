@@ -46,6 +46,28 @@ public sealed class OrdersController : ControllerBase
         return CreatedAtAction(nameof(GetOrderDetail), new { id = created.Id }, created);
     }
 
+    [HttpPut("{id}")]
+    public async Task<ActionResult<OrderDetail>> UpdateOrder(string id, [FromBody] UpdateOrderRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.FuelType)
+            || request.QuantityGallons <= 0
+            || string.IsNullOrWhiteSpace(request.Address)
+            || string.IsNullOrWhiteSpace(request.TimeWindow))
+        {
+            return BadRequest(new { message = "Completa combustible, cantidad, dirección y horario." });
+        }
+
+        var updated = await _repository.UpdateOrderAsync(User.GetRequiredUserId(), id, request);
+        return updated is null ? NotFound() : Ok(updated);
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeleteOrder(string id)
+    {
+        var deleted = await _repository.DeleteOrderAsync(User.GetRequiredUserId(), id);
+        return deleted ? NoContent() : NotFound();
+    }
+
     [HttpPatch("{id}/status")]
     public async Task<ActionResult<OrderDetail>> UpdateOrderStatus(
         string id, [FromBody] UpdateOrderStatusRequest request)

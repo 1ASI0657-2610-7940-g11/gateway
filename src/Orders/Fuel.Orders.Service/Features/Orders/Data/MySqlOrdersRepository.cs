@@ -65,6 +65,32 @@ public sealed class MySqlOrdersRepository : IOrdersRepository
         return ToDetail(entity);
     }
 
+    public async Task<OrderDetail?> UpdateOrderAsync(string userId, string id, UpdateOrderRequest request)
+    {
+        var entity = await _db.Orders.SingleOrDefaultAsync(x => x.UserId == userId && x.Id == id);
+        if (entity is null) return null;
+
+        entity.Product = request.FuelType.Trim();
+        entity.QuantityGallons = request.QuantityGallons;
+        entity.Address = request.Address.Trim();
+        entity.TimeWindow = request.TimeWindow.Trim();
+        entity.Notes = request.Notes?.Trim();
+        entity.Eta = "Pedido actualizado. Entrega pendiente de programación";
+
+        await _db.SaveChangesAsync();
+        return ToDetail(entity);
+    }
+
+    public async Task<bool> DeleteOrderAsync(string userId, string id)
+    {
+        var entity = await _db.Orders.SingleOrDefaultAsync(x => x.UserId == userId && x.Id == id);
+        if (entity is null) return false;
+
+        _db.Orders.Remove(entity);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
     public async Task<OrderDetail?> UpdateOrderStatusAsync(string userId, string id, UpdateOrderStatusRequest request)
     {
         var entity = await _db.Orders.SingleOrDefaultAsync(x => x.UserId == userId && x.Id == id);
@@ -138,6 +164,7 @@ public sealed class MySqlOrdersRepository : IOrdersRepository
         Plant = o.Plant,
         Address = o.Address,
         TimeWindow = o.TimeWindow,
+        Notes = o.Notes,
         PaymentMethod = o.PaymentMethod,
         Amount = o.Amount.HasValue ? (double)o.Amount.Value : null,
         VehicleId = o.VehicleId,

@@ -13,6 +13,7 @@ public class OrderDetail
     public string Plant { get; set; } = default!;
     public string Address { get; set; } = default!;
     public string TimeWindow { get; set; } = default!;
+    public string? Notes { get; set; }
     public string? PaymentMethod { get; set; }
     public double? Amount { get; set; }
     public string? VehicleId { get; set; }
