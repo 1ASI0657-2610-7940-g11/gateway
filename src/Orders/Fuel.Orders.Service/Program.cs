@@ -171,4 +171,69 @@ static async Task EnsureOrdersSchemaAsync(
             KEY `IX_orders_UserId_CreatedAtUtc` (`UserId`, `CreatedAtUtc`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """);
+
+    await EnsureColumnAsync(database, "orders", "Id", "varchar(32) NOT NULL");
+    await EnsureColumnAsync(database, "orders", "UserId", "varchar(32) NOT NULL");
+    await EnsureColumnAsync(database, "orders", "Code", "varchar(40) NOT NULL");
+    await EnsureColumnAsync(database, "orders", "Status", "varchar(20) NOT NULL DEFAULT 'Scheduled'");
+    await EnsureColumnAsync(database, "orders", "Product", "varchar(100) NOT NULL DEFAULT 'Diesel B5'");
+    await EnsureColumnAsync(database, "orders", "QuantityGallons", "int NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(database, "orders", "CreatedAtUtc", "datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)");
+    await EnsureColumnAsync(database, "orders", "Eta", "varchar(200) NOT NULL DEFAULT 'Pendiente'");
+    await EnsureColumnAsync(database, "orders", "Plant", "varchar(160) NOT NULL DEFAULT 'Por asignar'");
+    await EnsureColumnAsync(database, "orders", "Address", "varchar(300) NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(database, "orders", "TimeWindow", "varchar(100) NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(database, "orders", "Notes", "varchar(1000) NULL");
+    await EnsureColumnAsync(database, "orders", "PaymentMethod", "varchar(120) NULL");
+    await EnsureColumnAsync(database, "orders", "Amount", "decimal(14,2) NULL");
+    await EnsureColumnAsync(database, "orders", "VehicleId", "varchar(60) NULL");
+    await EnsureColumnAsync(database, "orders", "VehiclePlate", "varchar(30) NULL");
+    await EnsureColumnAsync(database, "orders", "DriverName", "varchar(160) NULL");
+    await EnsureColumnAsync(database, "orders", "LastStatusComment", "varchar(500) NULL");
+}
+
+static async Task EnsureColumnAsync(
+    Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade database,
+    string tableName,
+    string columnName,
+    string definition)
+{
+    var connection = database.GetDbConnection();
+    var shouldClose = connection.State != System.Data.ConnectionState.Open;
+    if (shouldClose)
+        await connection.OpenAsync();
+
+    try
+    {
+        await using var check = connection.CreateCommand();
+        check.CommandText = """
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = @tableName
+              AND COLUMN_NAME = @columnName;
+            """;
+
+        var tableParam = check.CreateParameter();
+        tableParam.ParameterName = "@tableName";
+        tableParam.Value = tableName;
+        check.Parameters.Add(tableParam);
+
+        var columnParam = check.CreateParameter();
+        columnParam.ParameterName = "@columnName";
+        columnParam.Value = columnName;
+        check.Parameters.Add(columnParam);
+
+        var exists = Convert.ToInt32(await check.ExecuteScalarAsync()) > 0;
+        if (exists) return;
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE `{tableName}` ADD COLUMN `{columnName}` {definition};";
+        await alter.ExecuteNonQueryAsync();
+    }
+    finally
+    {
+        if (shouldClose)
+            await connection.CloseAsync();
+    }
 }

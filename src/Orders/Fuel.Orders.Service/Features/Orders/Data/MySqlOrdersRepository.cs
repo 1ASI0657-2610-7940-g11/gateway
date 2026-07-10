@@ -117,7 +117,7 @@ public sealed class MySqlOrdersRepository : IOrdersRepository
     {
         Id = o.Id,
         Code = o.Code,
-        Status = Enum.Parse<OrderStatus>(o.Status),
+        Status = ParseStatus(o.Status),
         ScheduledAt = o.Eta,
         PlantName = o.Plant,
         FuelType = o.Product,
@@ -129,7 +129,7 @@ public sealed class MySqlOrdersRepository : IOrdersRepository
     {
         Id = o.Id,
         Code = o.Code,
-        Status = Enum.Parse<OrderStatus>(o.Status),
+        Status = ParseStatus(o.Status),
         Product = o.Product,
         QuantityGallons = o.QuantityGallons,
         CreatedAt = $"Creado el {o.CreatedAtUtc:dd/MM/yyyy HH:mm} UTC",
@@ -145,4 +145,11 @@ public sealed class MySqlOrdersRepository : IOrdersRepository
         DriverName = o.DriverName,
         LastStatusComment = o.LastStatusComment
     };
+
+    private static OrderStatus ParseStatus(string? status)
+    {
+        return Enum.TryParse<OrderStatus>(status, ignoreCase: true, out var parsed)
+            ? parsed
+            : OrderStatus.Scheduled;
+    }
 }

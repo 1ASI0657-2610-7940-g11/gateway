@@ -35,26 +35,33 @@ public class RabbitMqPublisher : IMessagePublisher, IDisposable
 
     public void Publish<T>(string exchange, string routingKey, T message, string? correlationId = null)
     {
-        var channel = GetOrCreateChannel();
-        if (channel is null)
+        try
         {
-            _logger.LogWarning("RabbitMQ unavailable. Skipping publish of {Event}.", typeof(T).Name);
-            return;
+            var channel = GetOrCreateChannel();
+            if (channel is null)
+            {
+                _logger.LogWarning("RabbitMQ unavailable. Skipping publish of {Event}.", typeof(T).Name);
+                return;
+            }
+
+            channel.ExchangeDeclare(exchange, ExchangeType.Fanout, durable: true);
+
+            var json = JsonSerializer.Serialize(message);
+            var body = Encoding.UTF8.GetBytes(json);
+
+            var props = channel.CreateBasicProperties();
+            props.Persistent = true;
+            props.Headers = new Dictionary<string, object> { ["EventType"] = typeof(T).Name };
+            if (correlationId != null)
+                props.CorrelationId = correlationId;
+
+            channel.BasicPublish(exchange, routingKey, props, body);
+            _logger.LogInformation("Published {Event} with correlation {CorrelationId}", typeof(T).Name, correlationId);
         }
-
-        channel.ExchangeDeclare(exchange, ExchangeType.Fanout, durable: true);
-
-        var json = JsonSerializer.Serialize(message);
-        var body = Encoding.UTF8.GetBytes(json);
-
-        var props = channel.CreateBasicProperties();
-        props.Persistent = true;
-        props.Headers = new Dictionary<string, object> { ["EventType"] = typeof(T).Name };
-        if (correlationId != null)
-            props.CorrelationId = correlationId;
-
-        channel.BasicPublish(exchange, routingKey, props, body);
-        _logger.LogInformation("Published {Event} with correlation {CorrelationId}", typeof(T).Name, correlationId);
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "RabbitMQ publish failed. Continuing without publishing {Event}.", typeof(T).Name);
+        }
     }
 
     private IModel? GetOrCreateChannel()
