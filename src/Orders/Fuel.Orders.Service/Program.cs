@@ -5,6 +5,7 @@ using Fuel.Orders.Service.Infrastructure.Auth;
 using Fuel.Orders.Service.Infrastructure.Data;
 using Fuel.Orders.Service.Infrastructure.Messaging;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -101,6 +102,37 @@ using (var scope = app.Services.CreateScope())
 
 app.UseCorrelationId();
 
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var exception = context.Features.Get<IExceptionHandlerPathFeature>()?.Error;
+        var correlationId = context.GetCorrelationId();
+
+        if (exception is UnauthorizedAccessException)
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                message = "Tu sesión no es válida. Inicia sesión nuevamente.",
+                correlationId
+            });
+            return;
+        }
+
+        app.Logger.LogError(exception,
+            "Unhandled Orders exception. CorrelationId: {CorrelationId}",
+            correlationId);
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            message = "No se pudo procesar el pedido en el servicio Orders.",
+            correlationId
+        });
+    });
+});
+
 if (app.Environment.IsDevelopment()
     || builder.Configuration.GetValue<bool>("ENABLE_SWAGGER"))
 {
@@ -147,7 +179,7 @@ static async Task EnsureOrdersSchemaAsync(
     Microsoft.EntityFrameworkCore.Infrastructure.DatabaseFacade database)
 {
     await database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS `orders` (
+        CREATE TABLE IF NOT EXISTS `orders_microservice` (
             `Id` varchar(32) NOT NULL,
             `UserId` varchar(32) NOT NULL,
             `Code` varchar(40) NOT NULL,
@@ -167,29 +199,30 @@ static async Task EnsureOrdersSchemaAsync(
             `DriverName` varchar(160) NULL,
             `LastStatusComment` varchar(500) NULL,
             PRIMARY KEY (`Id`),
-            UNIQUE KEY `IX_orders_Code` (`Code`),
-            KEY `IX_orders_UserId_CreatedAtUtc` (`UserId`, `CreatedAtUtc`)
+            UNIQUE KEY `IX_orders_microservice_Code` (`Code`),
+            KEY `IX_orders_microservice_UserId_CreatedAtUtc` (`UserId`, `CreatedAtUtc`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """);
 
-    await EnsureColumnAsync(database, "orders", "Id", "varchar(32) NOT NULL");
-    await EnsureColumnAsync(database, "orders", "UserId", "varchar(32) NOT NULL");
-    await EnsureColumnAsync(database, "orders", "Code", "varchar(40) NOT NULL");
-    await EnsureColumnAsync(database, "orders", "Status", "varchar(20) NOT NULL DEFAULT 'Scheduled'");
-    await EnsureColumnAsync(database, "orders", "Product", "varchar(100) NOT NULL DEFAULT 'Diesel B5'");
-    await EnsureColumnAsync(database, "orders", "QuantityGallons", "int NOT NULL DEFAULT 0");
-    await EnsureColumnAsync(database, "orders", "CreatedAtUtc", "datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)");
-    await EnsureColumnAsync(database, "orders", "Eta", "varchar(200) NOT NULL DEFAULT 'Pendiente'");
-    await EnsureColumnAsync(database, "orders", "Plant", "varchar(160) NOT NULL DEFAULT 'Por asignar'");
-    await EnsureColumnAsync(database, "orders", "Address", "varchar(300) NOT NULL DEFAULT ''");
-    await EnsureColumnAsync(database, "orders", "TimeWindow", "varchar(100) NOT NULL DEFAULT ''");
-    await EnsureColumnAsync(database, "orders", "Notes", "varchar(1000) NULL");
-    await EnsureColumnAsync(database, "orders", "PaymentMethod", "varchar(120) NULL");
-    await EnsureColumnAsync(database, "orders", "Amount", "decimal(14,2) NULL");
-    await EnsureColumnAsync(database, "orders", "VehicleId", "varchar(60) NULL");
-    await EnsureColumnAsync(database, "orders", "VehiclePlate", "varchar(30) NULL");
-    await EnsureColumnAsync(database, "orders", "DriverName", "varchar(160) NULL");
-    await EnsureColumnAsync(database, "orders", "LastStatusComment", "varchar(500) NULL");
+    const string ordersTable = "orders_microservice";
+    await EnsureColumnAsync(database, ordersTable, "Id", "varchar(32) NOT NULL");
+    await EnsureColumnAsync(database, ordersTable, "UserId", "varchar(32) NOT NULL");
+    await EnsureColumnAsync(database, ordersTable, "Code", "varchar(40) NOT NULL");
+    await EnsureColumnAsync(database, ordersTable, "Status", "varchar(20) NOT NULL DEFAULT 'Scheduled'");
+    await EnsureColumnAsync(database, ordersTable, "Product", "varchar(100) NOT NULL DEFAULT 'Diesel B5'");
+    await EnsureColumnAsync(database, ordersTable, "QuantityGallons", "int NOT NULL DEFAULT 0");
+    await EnsureColumnAsync(database, ordersTable, "CreatedAtUtc", "datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)");
+    await EnsureColumnAsync(database, ordersTable, "Eta", "varchar(200) NOT NULL DEFAULT 'Pendiente'");
+    await EnsureColumnAsync(database, ordersTable, "Plant", "varchar(160) NOT NULL DEFAULT 'Por asignar'");
+    await EnsureColumnAsync(database, ordersTable, "Address", "varchar(300) NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(database, ordersTable, "TimeWindow", "varchar(100) NOT NULL DEFAULT ''");
+    await EnsureColumnAsync(database, ordersTable, "Notes", "varchar(1000) NULL");
+    await EnsureColumnAsync(database, ordersTable, "PaymentMethod", "varchar(120) NULL");
+    await EnsureColumnAsync(database, ordersTable, "Amount", "decimal(14,2) NULL");
+    await EnsureColumnAsync(database, ordersTable, "VehicleId", "varchar(60) NULL");
+    await EnsureColumnAsync(database, ordersTable, "VehiclePlate", "varchar(30) NULL");
+    await EnsureColumnAsync(database, ordersTable, "DriverName", "varchar(160) NULL");
+    await EnsureColumnAsync(database, ordersTable, "LastStatusComment", "varchar(500) NULL");
 }
 
 static async Task EnsureColumnAsync(

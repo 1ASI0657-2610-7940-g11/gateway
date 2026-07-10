@@ -13,7 +13,7 @@ public sealed class OrdersDbContext : DbContext
     {
         modelBuilder.Entity<OrderEntity>(entity =>
         {
-            entity.ToTable("orders");
+            entity.ToTable("orders_microservice");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasMaxLength(32);
             entity.Property(x => x.UserId).HasMaxLength(32);

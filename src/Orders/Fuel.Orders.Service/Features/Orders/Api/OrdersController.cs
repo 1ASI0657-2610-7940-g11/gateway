@@ -1,10 +1,12 @@
 using Fuel.Orders.Service.Features.Orders.Domain;
 using Fuel.Orders.Service.Infrastructure.Auth;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Fuel.Orders.Service.Features.Orders.Api;
 
 [ApiController]
+[Authorize]
 [Route("api/[controller]")]
 public sealed class OrdersController : ControllerBase
 {
